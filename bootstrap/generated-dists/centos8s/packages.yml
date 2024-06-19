@@ -55,6 +55,7 @@ packages:
   - libxslt
   - lmdb
   - lmdb-devel
+  - lvm2-devel
   - make
   - mingw64-gcc
   - ncurses-devel

@@ -38,6 +38,7 @@
 #include "lib/util_path.h"
 #include "libcli/security/security.h"
 #include "lib/util/tevent_unix.h"
+#include "lvm2app.h"
 
 struct shadow_copy2_config {
 	char *gmt_format;
@@ -53,6 +54,8 @@ struct shadow_copy2_config {
 	char *mount_point;
 	char *rel_connectpath; /* share root, relative to a snapshot root */
 	char *snapshot_basepath; /* the absolute version of snapdir */
+	char *volume; /* origin volume vg/lv */
+
 };
 
 /* Data-structure to hold the list of snap entries */
@@ -87,6 +90,40 @@ static int shadow_copy2_get_shadow_copy_data(
 	vfs_handle_struct *handle, files_struct *fsp,
 	struct shadow_copy_data *shadow_copy2_data,
 	bool labels);
+
+struct lvm_lv_t {
+    char lvid[72];
+    const char* name;
+
+    struct volume_group *vg;
+
+    uint64_t status;
+    int64_t alloc_policy;
+    struct profile *profile;
+    uint32_t read_ahead;
+    int32_t major;
+    int32_t minor;
+
+    uint64_t size;
+    uint32_t le_count;
+
+    uint32_t origin_count;
+    uint32_t external_count;
+    struct dm_list snapshot_segs;
+    struct lv_segment *snapshot;
+
+    struct dm_list segments;
+    struct dm_list tags;
+    struct dm_list segs_using_this_lv;
+    struct dm_list indirect_glvs;
+
+    struct generic_logical_volume *this_glv;
+    uint64_t timestamp;
+    unsigned new_lock_args:1;
+    const char *hostname;
+    const char *lock_args;
+};
+
 
 /**
  * This function will create a new snapshot list entry and
@@ -1973,6 +2010,10 @@ static const char *shadow_copy2_find_snapdir(TALLOC_CTX *mem_ctx,
 
 	config = priv->config;
 
+	if (config->volume) {
+		return config->volume;
+	}
+
 	/*
 	 * If the non-snapdirseverywhere mode, we should not search!
 	 */
@@ -2136,6 +2177,58 @@ static void shadow_copy2_sort_data(vfs_handle_struct *handle,
 	}
 }
 
+// Sample
+static int lvm2app_snapshots_in_vg(char *vg_name, char *origin, char **snaplist) {
+    struct lvm_lv_list *lvl;
+    struct dm_list *lvs;
+    lvm_t lvm;
+    vg_t vg;
+
+    lvm = lvm_init(NULL);
+
+    if (!lvm) {
+        DEBUG(0,("failed to scan lvm\n"));
+        return -1;
+    }
+
+    vg  = lvm_vg_open(lvm, vg_name, "r", 0);
+
+    if (!vg) {
+        DEBUG(0,("failed to find volume group\n"));
+        lvm_quit(lvm);
+        return -1;
+    }
+
+    lvs = lvm_vg_list_lvs(vg);
+    lvm_vg_close(vg);
+
+    if (!lvs) {
+        DEBUG(0,("failed to find logical volumes\n"));
+        lvm_quit(lvm);
+        return -1;
+    }
+
+    dm_list_iterate_items(lvl, lvs) {
+        char *name      = lvm_lv_get_name(lvl->lv);
+        char *lv_origin = lvm_lv_get_origin(lvl->lv);
+        struct lvm_lv_t *lv = lvl->lv;
+
+        if (!lv_origin)
+        {
+            continue;
+        }
+
+        if (!strcmp(origin, lv_origin))
+        {
+            DEBUG(0,("snap: %s [created: %d]\n", name, lv->timestamp));
+        }
+    }
+
+    lvm_quit(lvm);
+
+    return 0;
+}
+
 static int shadow_copy2_get_shadow_copy_data(
 	vfs_handle_struct *handle, files_struct *fsp,
 	struct shadow_copy_data *shadow_copy2_data,
@@ -2158,12 +2251,19 @@ static int shadow_copy2_get_shadow_copy_data(
 	int ret = -1;
 	NTSTATUS status;
 	int saved_errno = 0;
+	int search_lvm = 0;
 
 	snapdir = shadow_copy2_find_snapdir(tmp_ctx, handle, fsp->fsp_name);
 	if (snapdir == NULL) {
 		DEBUG(0,("shadow:snapdir not found for %s in get_shadow_copy_data\n",
 			 handle->conn->connectpath));
 		errno = EINVAL;
+		goto done;
+	}
+
+	// TODO how to check which is snapdir or volume
+	if (search_lvm) {
+		// TODO
 		goto done;
 	}
 
@@ -2945,6 +3045,7 @@ static int shadow_copy2_connect(struct vfs_handle_struct *handle,
 	const char *basedir = NULL;
 	const char *snapsharepath = NULL;
 	const char *mount_point;
+	const char *volume;
 
 	DBG_DEBUG("cnum[%" PRIu32 "], connectpath[%s]\n",
 		  handle->conn->cnum,
@@ -3220,6 +3321,18 @@ static int shadow_copy2_connect(struct vfs_handle_struct *handle,
 		}
 	}
 
+    volume = lp_parm_const_string(SNUM(handle->conn),
+            "shadow", "volume", NULL);
+
+    config->volume = talloc_strdup(config, volume);
+    if (volume != NULL) {
+        if (volume[0] == '/') {
+            DEBUG(0, ("talloc_strdup() failed\n"));
+            errno = ENOMEM;
+            return -1;
+        }
+    }
+
 	trim_string(config->mount_point, NULL, "/");
 	trim_string(config->rel_connectpath, "/", "/");
 	trim_string(config->snapdir, NULL, "/");
@@ -3239,6 +3352,7 @@ static int shadow_copy2_connect(struct vfs_handle_struct *handle,
 		   "  cross mountpoints: %s\n"
 		   "  fix inodes: %s\n"
 		   "  sort order: %s\n"
+		   "  volume: %s\n"
 		   "",
 		   handle->conn->connectpath,
 		   config->mount_point,
@@ -3252,7 +3366,8 @@ static int shadow_copy2_connect(struct vfs_handle_struct *handle,
 		   config->snapdirseverywhere ? "yes" : "no",
 		   config->crossmountpoints ? "yes" : "no",
 		   config->fixinodes ? "yes" : "no",
-		   config->sort_order
+		   config->sort_order,
+		   config->volume,
 		   ));
 
 

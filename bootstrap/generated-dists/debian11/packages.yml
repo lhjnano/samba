@@ -64,6 +64,7 @@ packages:
   - libunwind-dev
   - liburing-dev
   - lmdb-utils
+  - lvm2-dev
   - locales
   - lsb-release
   - make

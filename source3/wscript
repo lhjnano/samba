@@ -1597,6 +1597,9 @@ int main(void) {
                     define='HAVE_UNSHARE_CLONE_FS',
                     msg='for Linux unshare(CLONE_FS)')
 
+    conf.CHECK_LIB('lvm2app', shlib=True)
+    conf.DEFINE('HAVE_LVM', 1)
+
     #
     # cluster support (CTDB)
     #
@@ -1927,6 +1930,9 @@ int main(void) {
 
     if conf.CONFIG_SET('HAVE_VXFS'):
         default_shared_modules.extend(['vfs_vxfs'])
+
+    if conf.CONFIG_SET('HAVE_LVM'):
+        default_shared_modules.extend(['lvm2app'])
 
     explicit_shared_modules = TO_LIST(Options.options.shared_modules, delimiter=',')
     explicit_static_modules = TO_LIST(Options.options.static_modules, delimiter=',')

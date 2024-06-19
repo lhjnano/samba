@@ -185,7 +185,7 @@ bld.SAMBA3_MODULE('vfs_shadow_copy2',
                  subsystem='vfs',
                  source='vfs_shadow_copy2.c',
                  allow_warnings=True,
-                 deps='samba-util tdb',
+                 deps='samba-util tdb lvm2app',
                  init_function='',
                  internal_module=bld.SAMBA3_IS_STATIC_MODULE('vfs_shadow_copy2'),
                  enabled=bld.SAMBA3_IS_ENABLED_MODULE('vfs_shadow_copy2'))

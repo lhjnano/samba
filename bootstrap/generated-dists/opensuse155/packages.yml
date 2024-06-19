@@ -56,6 +56,7 @@ packages:
   - lmdb
   - lmdb-devel
   - lsb-release
+  - lvm2-devel
   - make
   - mingw64-gcc
   - ncurses-devel

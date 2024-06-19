@@ -66,6 +66,7 @@ packages:
   - lmdb-utils
   - locales
   - lsb-release
+  - lvm2-dev
   - make
   - mawk
   - mingw-w64
